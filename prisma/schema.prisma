@@ -1,0 +1,317 @@
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+enum Role {
+  user
+  admin
+}
+
+enum RoomType {
+  ONE_ON_ONE @map("1on1")
+  GROUP      @map("group")
+}
+
+enum RoomStatus {
+  waiting
+  active
+  ended
+}
+
+enum JoinRequestStatus {
+  pending
+  approved
+  rejected
+}
+
+enum EmailLogType {
+  join_approved
+  watchlist_match
+  weekly_digest
+}
+
+enum EmailLogStatus {
+  sent
+  failed
+}
+
+model User {
+  id                      String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                   String               @unique
+  username                String               @unique
+  passwordHash            String               @map("password_hash")
+  avatarUrl               String?              @map("avatar_url")
+  bio                     String?
+  role                    Role                 @default(user)
+  interestVec             Unsupported("vector(768)")? @map("interest_vec")
+  createdAt               DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt               DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  interests               UserInterest[]
+  createdRooms            Room[]               @relation("CreatedRooms")
+  participants            Participant[]
+  messages                Message[]
+  joinRequests            JoinRequest[]
+  savedConversations      SavedConversation[]
+  watchedTopics           WatchedTopic[]
+  emailLogs               EmailLog[]
+  sentDirectMessages      DirectMessage[]      @relation("SentDirectMessages")
+  receivedDirectMessages  DirectMessage[]      @relation("ReceivedDirectMessages")
+  blockedUsers            UserBlock[]          @relation("UserBlocksBlocker")
+  blockedBy               UserBlock[]          @relation("UserBlocksBlocked")
+  auditLogs               AdminAuditLog[]
+
+  @@map("users")
+}
+
+model InterestCategory {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String
+  slug          String         @unique
+  icon          String
+
+  userInterests UserInterest[]
+  systemTopics  SystemTopic[]
+  rooms         Room[]
+
+  @@map("interest_categories")
+}
+
+model UserInterest {
+  id         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String           @map("user_id") @db.Uuid
+  categoryId String           @map("category_id") @db.Uuid
+  weight     Float            @default(1.0)
+
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category   InterestCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId])
+  @@map("user_interests")
+}
+
+model SystemTopic {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title        String
+  description  String
+  categoryId   String           @map("category_id") @db.Uuid
+  embedding    Unsupported("vector(768)")?
+  searchVector Unsupported("tsvector")? @map("search_vector")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  category     InterestCategory @relation(fields: [categoryId], references: [id])
+  rooms        Room[]
+  watchedTopics WatchedTopic[]
+
+  @@map("system_topics")
+}
+
+model WatchedTopic {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  topicId   String      @map("topic_id") @db.Uuid
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic     SystemTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topicId])
+  @@map("watched_topics")
+}
+
+model Room {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type              RoomType
+  systemTopicId     String?              @map("system_topic_id") @db.Uuid
+  customTopic       String?              @map("custom_topic")
+  customDescription String?              @map("custom_description")
+  categoryId        String?              @map("category_id") @db.Uuid
+  createdBy         String?              @map("created_by") @db.Uuid
+  cap               Int?
+  status            RoomStatus           @default(waiting)
+  hasAi             Boolean              @default(false) @map("has_ai")
+  isPublic          Boolean              @default(false) @map("is_public")
+  searchVector      Unsupported("tsvector")? @map("search_vector")
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  endedAt           DateTime?            @map("ended_at") @db.Timestamptz
+
+  systemTopic       SystemTopic?         @relation(fields: [systemTopicId], references: [id])
+  category          InterestCategory?    @relation(fields: [categoryId], references: [id])
+  creator           User?                @relation("CreatedRooms", fields: [createdBy], references: [id])
+
+  participants      Participant[]
+  messages          Message[]
+  joinRequests      JoinRequest[]
+  digest            ConversationDigest?
+  postChatDigest    PostChatDigest?
+  argumentMap       ArgumentMap?
+  starter           ConversationStarter?
+  savedConversations SavedConversation[]
+
+  @@map("rooms")
+}
+
+model Participant {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    String    @map("room_id") @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  isAi      Boolean   @default(false) @map("is_ai")
+  joinedAt  DateTime  @default(now()) @map("joined_at") @db.Timestamptz
+  leftAt    DateTime? @map("left_at") @db.Timestamptz
+
+  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("participants")
+}
+
+model Message {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    String   @map("room_id") @db.Uuid
+  senderId  String?  @map("sender_id") @db.Uuid
+  isAi      Boolean  @default(false) @map("is_ai")
+  content   String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sender    User?    @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  @@index([roomId, createdAt], name: "messages_room_id_idx")
+  @@map("messages")
+}
+
+model JoinRequest {
+  id        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    String            @map("room_id") @db.Uuid
+  userId    String            @map("user_id") @db.Uuid
+  status    JoinRequestStatus @default(pending)
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  room      Room              @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@map("join_requests")
+}
+
+model ConversationDigest {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId             String   @unique @map("room_id") @db.Uuid
+  summary            String
+  user1Position      String   @map("user1_position")
+  user2Position      String   @map("user2_position")
+  unresolvedQuestion String   @map("unresolved_question")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  room               Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@map("conversation_digests")
+}
+
+model PostChatDigest {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId             String   @unique @map("room_id") @db.Uuid
+  summaryStanceUser1 String   @map("summary_stance_user1")
+  summaryStanceUser2 String   @map("summary_stance_user2")
+  openQuestions      String   @map("open_questions")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  room               Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@map("post_chat_digests")
+}
+
+model ArgumentMap {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    String   @unique @map("room_id") @db.Uuid
+  data      Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@map("argument_maps")
+}
+
+model SavedConversation {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    String   @map("room_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@map("saved_conversations")
+}
+
+model ConversationStarter {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId    String   @unique @map("room_id") @db.Uuid
+  questions String[]
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@map("conversation_starters")
+}
+
+model EmailLog {
+  id        String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String         @map("user_id") @db.Uuid
+  type      EmailLogType
+  status    EmailLogStatus @default(sent)
+  sentAt    DateTime       @default(now()) @map("sent_at") @db.Timestamptz
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("email_logs")
+}
+
+model DirectMessage {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  senderId   String   @map("sender_id") @db.Uuid
+  receiverId String   @map("receiver_id") @db.Uuid
+  content    String
+  isRead     Boolean  @default(false) @map("is_read")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  sender     User     @relation("SentDirectMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User     @relation("ReceivedDirectMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@map("direct_messages")
+}
+
+model UserBlock {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  blockerId String   @map("blocker_id") @db.Uuid
+  blockedId String   @map("blocked_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  blocker   User     @relation("UserBlocksBlocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User     @relation("UserBlocksBlocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@map("user_blocks")
+}
+
+model AdminAuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  adminId    String   @map("admin_id") @db.Uuid
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
+  details    Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  admin      User     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("admin_audit_logs")
+}
