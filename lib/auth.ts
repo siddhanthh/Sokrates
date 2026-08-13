@@ -137,6 +137,7 @@ export async function getSessionUser(req: Request) {
       },
     });
 
+    if (user?.suspended) return null;
     return user;
   } catch (err) {
     return null;

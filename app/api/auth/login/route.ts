@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { verifyPassword, signJwt } from "@/lib/auth";
-import { generateFallbackEmbedding } from "@/lib/ai/gemini";
+import { generateEmbedding } from "@/lib/ai/gemini";
 
 export async function POST(req: Request) {
   try {
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       );
     }
 
-    if ((user as any).suspended || user.role === ("suspended" as any)) {
+    if (user.suspended) {
       return NextResponse.json(
         { error: "Account suspended by administrator" },
         { status: 403 }
@@ -51,7 +51,8 @@ export async function POST(req: Request) {
     const token = signJwt({ userId: user.id, role: user.role });
 
     const categoryIds = user.interests.map((ui) => ui.categoryId);
-    const fallbackVec = generateFallbackEmbedding(categoryIds.join(" ") || "philosophy");
+    const categoryText = user.interests.map((ui) => ui.category?.name || ui.categoryId).join(" ");
+    const interestVec = await generateEmbedding(categoryText || "philosophy");
 
     const safeUser = {
       id: user.id,
@@ -60,8 +61,9 @@ export async function POST(req: Request) {
       avatarUrl: user.avatarUrl,
       bio: user.bio,
       role: user.role,
+      suspended: user.suspended,
       interestCategories: categoryIds,
-      interestVec: fallbackVec,
+      interestVec,
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
     };

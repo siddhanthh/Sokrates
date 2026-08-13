@@ -57,14 +57,15 @@ export async function runTier2Tests(runner: TestSuiteRunner = new TestSuiteRunne
         aiJoined = true;
       });
 
-      // Enter queue with 100ms timeout
-      client.socket?.enterQueue("topic-1", 100);
+      // Enter queue with 200ms timeout
+      client.socket?.enterQueue("topic-1", 200);
+      await new Promise(r => setTimeout(r, 80));
 
       // Immediately leave queue before timeout
       client.socket?.leaveQueue("topic-1");
 
-      // Wait 150ms
-      await new Promise(r => setTimeout(r, 150));
+      // Wait 250ms
+      await new Promise(r => setTimeout(r, 250));
 
       ctx.assert(!aiJoined, "AI Fallback not triggered after queue cancellation");
     })

@@ -50,6 +50,7 @@ model User {
   avatarUrl               String?              @map("avatar_url")
   bio                     String?
   role                    Role                 @default(user)
+  suspended               Boolean              @default(false)
   interestVec             Unsupported("vector(768)")? @map("interest_vec")
   createdAt               DateTime             @default(now()) @map("created_at") @db.Timestamptz
   updatedAt               DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz

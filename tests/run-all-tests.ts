@@ -3,15 +3,16 @@ import { runTier1Tests } from "./tier1_features.test";
 import { runTier2Tests } from "./tier2_boundary.test";
 import { runTier3Tests } from "./tier3_cross_feature.test";
 import { runTier4Tests } from "./tier4_real_world.test";
+import { runChallengerStressTests } from "./challenger_stress_verification";
 
 /**
  * Sokrates Master E2E Test Runner
- * Executes Tiers 1-4 Test Suites and reports comprehensive metrics.
+ * Executes Tiers 1-5 Test Suites and reports comprehensive metrics.
  */
 
 async function main() {
   console.log(`\n===============================================================`);
-  console.log(`          SOKRATES E2E MASTER TEST RUNNER (TIERS 1-4)         `);
+  console.log(`          SOKRATES E2E MASTER TEST RUNNER (TIERS 1-5)         `);
   console.log(`===============================================================\n`);
 
   const runner = new TestSuiteRunner();
@@ -28,6 +29,9 @@ async function main() {
 
   console.log(`Executing Tier 4: Real-World Application Scenarios...`);
   const tier4Results = await runTier4Tests(runner);
+
+  console.log(`Executing Tier 5: Adversarial Stress & Resilience Tests...`);
+  const tier5Results = await runChallengerStressTests(runner);
 
   const totalDuration = Date.now() - startTime;
   const allResults = runner.getResults();
@@ -59,6 +63,7 @@ async function main() {
   printTierGroup("Tier 2: Boundary & Corner Cases", tier2Results);
   printTierGroup("Tier 3: Cross-Feature Pairwise Transitions", tier3Results);
   printTierGroup("Tier 4: Real-World Multi-User Scenarios", tier4Results);
+  printTierGroup("Tier 5: Adversarial Stress & Resilience", tier5Results);
 
   const passRate = ((totalPassed / allResults.length) * 100).toFixed(1);
 

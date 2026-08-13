@@ -1,4 +1,5 @@
-import { SokratesTestClient, TestSuiteRunner, TestResult, mockServer } from "./harness";
+import { SokratesTestClient, TestSuiteRunner, TestResult } from "./harness";
+import prisma from "../lib/prisma";
 
 /**
  * Tier 3: Cross-Feature Integration Test Suite
@@ -35,22 +36,22 @@ export async function runTier3Tests(runner: TestSuiteRunner = new TestSuiteRunne
         aiDoneReceived = true;
       });
 
-      // Enter queue with fast 30ms test fallback timeout
-      client.socket?.enterQueue("topic-1", 30);
+      // Enter queue with fast 50ms test fallback timeout
+      client.socket?.enterQueue("topic-1", 50);
 
       // Wait for queue timeout transition
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 200));
 
       ctx.assert(aiJoiningReceived, "Queue service successfully hands off to AI Fallback socket stream");
       ctx.assert(Boolean(assignedRoomId), "AI Fallback room ID created");
 
       // Verify room has_ai flag in server DB
-      const roomRecord = mockServer.rooms.get(assignedRoomId);
+      const roomRecord = await prisma.room.findUnique({ where: { id: assignedRoomId } });
       ctx.assert(Boolean(roomRecord?.hasAi), "Room state updated to has_ai = true");
 
       // User sends message in AI room
       client.socket?.sendMessage(assignedRoomId, "Is human perception a direct representation of reality?");
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 1200));
 
       ctx.assert(aiChunksCount > 0, "AI fallback streams token chunks over WebSocket");
       ctx.assert(aiDoneReceived, "AI fallback stream completes with ai_done event");
@@ -66,23 +67,33 @@ export async function runTier3Tests(runner: TestSuiteRunner = new TestSuiteRunne
       const client2 = new SokratesTestClient();
       await client2.register(`debater2_${Date.now()}@sokrates.app`, `debater2_${Date.now()}`);
 
-      // Create 1-on-1 room directly for test
-      const roomId = `room_1on1_pipe_${Date.now()}`;
-      mockServer.rooms.set(roomId, {
-        id: roomId,
-        type: "1on1",
-        systemTopicId: "topic-1",
-        status: "active",
-        hasAi: false,
-        isPublic: false,
-        createdAt: new Date(),
-      });
+      // Fetch a valid system topic
+      const topic = await prisma.systemTopic.findFirst();
 
-      // Add messages
-      mockServer.messages.push(
-        { id: "m1", roomId, senderId: client1.user?.id, isAi: false, content: "Hard determinism eliminates moral blame.", createdAt: new Date() },
-        { id: "m2", roomId, senderId: client2.user?.id, isAi: false, content: "Compatibilism retains moral responsibility.", createdAt: new Date() }
-      );
+      // Create 1-on-1 room directly in database for pipeline test
+      const roomRecord = await prisma.room.create({
+        data: {
+          type: "ONE_ON_ONE",
+          systemTopicId: topic?.id,
+          customTopic: topic?.title || "Free Will vs Determinism",
+          status: "active",
+          hasAi: false,
+          isPublic: false,
+          participants: {
+            create: [
+              { userId: client1.user?.id, isAi: false },
+              { userId: client2.user?.id, isAi: false },
+            ],
+          },
+          messages: {
+            create: [
+              { senderId: client1.user?.id, isAi: false, content: "Hard determinism eliminates moral blame." },
+              { senderId: client2.user?.id, isAi: false, content: "Compatibilism retains moral responsibility." },
+            ],
+          },
+        },
+      });
+      const roomId = roomRecord.id;
 
       // End Room (triggers post-chat pipeline)
       const endRes = await client1.endRoom(roomId);

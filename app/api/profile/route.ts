@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { generateEmbedding, generateFallbackEmbedding } from "@/lib/ai/gemini";
+import { generateEmbedding } from "@/lib/ai/gemini";
+
+const isUuid = (str?: string | null): boolean =>
+  Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
 
 export async function GET(req: Request) {
   try {
@@ -11,7 +14,9 @@ export async function GET(req: Request) {
     }
 
     const categoryIds = user.interests.map((ui) => ui.categoryId);
-    const fallbackVec = generateFallbackEmbedding(categoryIds.join(" ") || "philosophy");
+    const categoryNames = user.interests.map((ui) => ui.category?.name || ui.categoryId).filter(Boolean);
+    const categoryText = categoryNames.length > 0 ? categoryNames.join(" ") : categoryIds.join(" ") || "philosophy";
+    const interestVec = await generateEmbedding(categoryText);
 
     const safeUser = {
       id: user.id,
@@ -20,8 +25,9 @@ export async function GET(req: Request) {
       avatarUrl: user.avatarUrl,
       bio: user.bio,
       role: user.role,
+      suspended: user.suspended,
       interestCategories: categoryIds,
-      interestVec: fallbackVec,
+      interestVec,
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
     };
@@ -43,24 +49,32 @@ export async function PUT(req: Request) {
     }
 
     const body = await req.json().catch(() => ({}));
-    const { bio, avatarUrl, categoryIds } = body;
+    const { bio, avatarUrl } = body;
+    const rawCategories = body.categoryIds || body.interestCategories;
 
     let updatedInterestVec: number[] | null = null;
     let selectedCategoryIds: string[] = user.interests.map((ui) => ui.categoryId);
 
-    if (Array.isArray(categoryIds)) {
-      selectedCategoryIds = categoryIds;
-      // Fetch category names for vector generation
-      const categories = await prisma.interestCategory.findMany({
-        where: {
-          OR: [
-            { id: { in: selectedCategoryIds } },
-            { slug: { in: selectedCategoryIds } },
-          ],
-        },
-      });
+    if (Array.isArray(rawCategories)) {
+      selectedCategoryIds = rawCategories;
+      const validUuidCatIds = selectedCategoryIds.filter(isUuid);
+      const slugOrNameCatIds = selectedCategoryIds.filter((id) => !isUuid(id));
 
-      const categoryText = categories.length > 0 ? categories.map((c) => c.name).join(" ") : selectedCategoryIds.join(" ");
+      const orConditions: any[] = [];
+      if (validUuidCatIds.length > 0) orConditions.push({ id: { in: validUuidCatIds } });
+      if (slugOrNameCatIds.length > 0) orConditions.push({ slug: { in: slugOrNameCatIds } });
+
+      const categories =
+        orConditions.length > 0
+          ? await prisma.interestCategory.findMany({
+              where: { OR: orConditions },
+            })
+          : [];
+
+      const categoryText =
+        categories.length > 0
+          ? categories.map((c) => c.name).join(" ")
+          : selectedCategoryIds.join(" ") || "philosophy";
       updatedInterestVec = await generateEmbedding(categoryText);
 
       // Re-link user interests
@@ -80,8 +94,8 @@ export async function PUT(req: Request) {
       // Update vector in DB
       try {
         await prisma.$executeRawUnsafe(
-          `UPDATE users SET interest_vec = $1::vector WHERE id = $2::uuid`,
-          JSON.stringify(updatedInterestVec),
+          `UPDATE users SET interest_vec = $1::float4[] WHERE id = $2::uuid`,
+          updatedInterestVec,
           user.id
         );
       } catch (err) {
@@ -97,7 +111,8 @@ export async function PUT(req: Request) {
       },
     });
 
-    const finalVec = updatedInterestVec || generateFallbackEmbedding(selectedCategoryIds.join(" ") || "philosophy");
+    const categoryTextFallback = selectedCategoryIds.join(" ") || "philosophy";
+    const finalVec = updatedInterestVec || (await generateEmbedding(categoryTextFallback));
 
     const safeUser = {
       id: updatedUser.id,
@@ -106,6 +121,7 @@ export async function PUT(req: Request) {
       avatarUrl: updatedUser.avatarUrl,
       bio: updatedUser.bio,
       role: updatedUser.role,
+      suspended: updatedUser.suspended,
       interestCategories: selectedCategoryIds,
       interestVec: finalVec,
       createdAt: updatedUser.createdAt.toISOString(),
@@ -119,6 +135,10 @@ export async function PUT(req: Request) {
       { status: 500 }
     );
   }
+}
+
+export async function POST(req: Request) {
+  return PUT(req);
 }
 
 export async function PATCH(req: Request) {

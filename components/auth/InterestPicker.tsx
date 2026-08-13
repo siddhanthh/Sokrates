@@ -67,7 +67,7 @@ export const InterestPicker: React.FC<InterestPickerProps> = ({
               } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
             >
               <span className="text-xl select-none">{cat.icon || "💡"}</span>
-              <span className="text-sm font-medium leading-snug break-words whitespace-normal">
+              <span className="text-sm font-medium truncate leading-snug">
                 {cat.name}
               </span>
             </button>

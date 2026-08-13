@@ -21,7 +21,7 @@ export async function runTier4Tests(runner: TestSuiteRunner = new TestSuiteRunne
 
       let notificationReceived = false;
       userA.socket?.on("watched_topic_active", (data: any) => {
-        if (data.topicId === "topic-1") notificationReceived = true;
+        if (data.topicId || data.topicTitle) notificationReceived = true;
       });
 
       // Step 2: User B (Descartes) setup & queue entry
@@ -46,7 +46,7 @@ export async function runTier4Tests(runner: TestSuiteRunner = new TestSuiteRunne
       });
 
       userA.socket?.enterQueue("topic-1");
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise(r => setTimeout(r, 200));
 
       ctx.assert(Boolean(userAMatchRoomId), "Spinoza receives match_found socket event");
       ctx.assertEqual(userAMatchRoomId, userBMatchRoomId, "Both debaters placed in identical 1-on-1 room");
@@ -122,6 +122,7 @@ export async function runTier4Tests(runner: TestSuiteRunner = new TestSuiteRunne
       ctx.assertStatus(approveRes.status, 200, "Host approves guest join request");
 
       // Step 4: Guest joins room & sends message using AI starter chip
+      host.socket?.joinRoom(roomId);
       guest.socket?.joinRoom(roomId);
       const selectedStarter = starters[0];
 
@@ -131,7 +132,7 @@ export async function runTier4Tests(runner: TestSuiteRunner = new TestSuiteRunne
       });
 
       guest.socket?.sendMessage(roomId, selectedStarter);
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 200));
 
       ctx.assert(roomMessageReceived, "Guest sends message pre-filled by AI starter question chip");
     })

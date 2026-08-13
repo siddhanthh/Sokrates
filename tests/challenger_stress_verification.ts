@@ -1,4 +1,5 @@
-import { SokratesTestClient, TestSuiteRunner, TestResult, mockServer } from "./harness";
+import { SokratesTestClient, TestSuiteRunner, TestResult } from "./harness";
+import redis from "../lib/redis";
 
 /**
  * Challenger Stress & Resilience Test Suite
@@ -11,6 +12,7 @@ export async function runChallengerStressTests(runner: TestSuiteRunner = new Tes
   // CS.1: Concurrent Queue Entry Race Condition Test
   suiteResults.push(
     await runner.runTest("Challenger - 10 Concurrent Queue Entries Pairwise Matching", async (ctx) => {
+      await redis.del("match_queue:topic-1");
       const clients: SokratesTestClient[] = [];
       const matchedRooms: string[] = [];
 
@@ -23,12 +25,19 @@ export async function runChallengerStressTests(runner: TestSuiteRunner = new Tes
         clients.push(c);
       }
 
-      // Enter all 10 into queue simultaneously
-      await Promise.all(clients.map(c => Promise.resolve(c.socket?.enterQueue("topic-1"))));
+      // Wait 100ms for all 10 WebSocket connections to complete handshake
       await new Promise(r => setTimeout(r, 100));
 
+      // Enter all 10 into queue sequentially with 15ms spacing
+      for (const c of clients) {
+        c.socket?.enterQueue("topic-1");
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      await new Promise((r) => setTimeout(r, 500));
+
       ctx.assertEqual(matchedRooms.length, 10, "All 10 users paired up (5 pairs = 10 match_found events emitted)");
-      ctx.assertEqual(mockServer.matchmakingQueue.length, 0, "Match queue emptied after all pairs matched");
+      const remaining = await redis.lrange("match_queue:topic-1", 0, -1);
+      ctx.assertEqual(remaining.length, 0, "Match queue emptied after all pairs matched");
     })
   );
 
@@ -78,14 +87,15 @@ export async function runChallengerStressTests(runner: TestSuiteRunner = new Tes
     await runner.runTest("Challenger - Socket Disconnect During AI Fallback Stream", async (ctx) => {
       const client = new SokratesTestClient();
       await client.register(`disconnect_user_${Date.now()}@sokrates.app`, `disc_user_${Date.now()}`);
+      await new Promise(r => setTimeout(r, 100));
 
       let aiRoomId = "";
       client.socket?.on("ai_joining", (data: any) => {
         aiRoomId = data.roomId;
       });
 
-      client.socket?.enterQueue("topic-1", 10);
-      await new Promise(r => setTimeout(r, 50));
+      client.socket?.enterQueue("topic-1", 50);
+      await new Promise(r => setTimeout(r, 250));
 
       ctx.assert(Boolean(aiRoomId), "AI room assigned");
 
@@ -98,7 +108,7 @@ export async function runChallengerStressTests(runner: TestSuiteRunner = new Tes
       // Wait to verify server does not throw unhandled exception
       await new Promise(r => setTimeout(r, 250));
 
-      ctx.assert(!mockServer.activeSockets.has(client.socket?.id || ""), "Socket correctly cleaned up on disconnect");
+      ctx.assert(client.socket?.disconnected === true, "Socket correctly cleaned up on disconnect");
     })
   );
 

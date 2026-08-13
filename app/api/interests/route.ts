@@ -1,1 +1,1 @@
-export { PUT as PATCH, PUT } from "../profile/route";
+export { PUT as PATCH, PUT, POST } from "../profile/route";

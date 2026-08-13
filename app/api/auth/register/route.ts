@@ -3,6 +3,9 @@ import prisma from "@/lib/prisma";
 import { hashPassword, signJwt } from "@/lib/auth";
 import { generateEmbedding } from "@/lib/ai/gemini";
 
+const isUuid = (str?: string | null): boolean =>
+  Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -30,24 +33,29 @@ export async function POST(req: Request) {
 
     const passwordHash = hashPassword(password);
     const role = email.includes("admin") ? "admin" : "user";
-    const selectedCategoryIds: string[] = Array.isArray(categoryIds) ? categoryIds : [];
+    const rawCategories = body.categoryIds || body.interestCategories;
+    const selectedCategoryIds: string[] = Array.isArray(rawCategories) ? rawCategories : [];
+
+    const validUuidCatIds = selectedCategoryIds.filter(isUuid);
+    const slugOrNameCatIds = selectedCategoryIds.filter((id) => !isUuid(id));
 
     // Fetch categories if provided to construct text for embedding
     let categoryNames: string[] = [];
     if (selectedCategoryIds.length > 0) {
-      const categories = await prisma.interestCategory.findMany({
-        where: {
-          OR: [
-            { id: { in: selectedCategoryIds.filter(id => id.includes("-") && id.length === 36) } },
-            { slug: { in: selectedCategoryIds } },
-            { id: { in: selectedCategoryIds } },
-          ],
-        },
-      });
-      categoryNames = categories.map((c) => c.name);
+      const orConditions: any[] = [];
+      if (validUuidCatIds.length > 0) orConditions.push({ id: { in: validUuidCatIds } });
+      if (slugOrNameCatIds.length > 0) orConditions.push({ slug: { in: slugOrNameCatIds } });
+
+      if (orConditions.length > 0) {
+        const categories = await prisma.interestCategory.findMany({
+          where: { OR: orConditions },
+        });
+        categoryNames = categories.map((c) => c.name);
+      }
     }
 
-    const embeddingText = categoryNames.length > 0 ? categoryNames.join(" ") : selectedCategoryIds.join(" ") || "general philosophy";
+    const embeddingText =
+      categoryNames.length > 0 ? categoryNames.join(" ") : selectedCategoryIds.join(" ") || "general philosophy";
     const interestVec = await generateEmbedding(embeddingText);
 
     const user = await prisma.user.create({
@@ -63,30 +71,31 @@ export async function POST(req: Request) {
 
     // Save interest categories linkage if valid categories exist in DB
     if (selectedCategoryIds.length > 0) {
-      const validCategories = await prisma.interestCategory.findMany({
-        where: {
-          OR: [
-            { id: { in: selectedCategoryIds } },
-            { slug: { in: selectedCategoryIds } },
-          ],
-        },
-      });
+      const orConditions: any[] = [];
+      if (validUuidCatIds.length > 0) orConditions.push({ id: { in: validUuidCatIds } });
+      if (slugOrNameCatIds.length > 0) orConditions.push({ slug: { in: slugOrNameCatIds } });
 
-      for (const cat of validCategories) {
-        await prisma.userInterest.create({
-          data: {
-            userId: user.id,
-            categoryId: cat.id,
-          },
-        }).catch(() => {});
+      if (orConditions.length > 0) {
+        const validCategories = await prisma.interestCategory.findMany({
+          where: { OR: orConditions },
+        });
+
+        for (const cat of validCategories) {
+          await prisma.userInterest.create({
+            data: {
+              userId: user.id,
+              categoryId: cat.id,
+            },
+          }).catch(() => {});
+        }
       }
     }
 
     // Try saving vector to interest_vec column
     try {
       await prisma.$executeRawUnsafe(
-        `UPDATE users SET interest_vec = $1::vector WHERE id = $2::uuid`,
-        JSON.stringify(interestVec),
+        `UPDATE users SET interest_vec = $1::float4[] WHERE id = $2::uuid`,
+        interestVec,
         user.id
       );
     } catch (err) {
@@ -102,6 +111,7 @@ export async function POST(req: Request) {
       avatarUrl: user.avatarUrl,
       bio: user.bio,
       role: user.role,
+      suspended: user.suspended,
       interestCategories: selectedCategoryIds,
       interestVec,
       createdAt: user.createdAt.toISOString(),
